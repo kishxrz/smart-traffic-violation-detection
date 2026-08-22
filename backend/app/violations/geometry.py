@@ -116,6 +116,30 @@ def movement_direction(
         return "down" if dy > 0 else "up"
 
 
+def vector_angle_degrees(vector: Point) -> float:
+    """
+    Compute angle of a 2D vector in screen coordinates in degrees [0, 360).
+    Screen coords: +X is 0° (right), +Y is 90° (down).
+    """
+    vx, vy = vector
+    if abs(vx) < 1e-6 and abs(vy) < 1e-6:
+        return 0.0
+    return math.degrees(math.atan2(vy, vx)) % 360.0
+
+
+def angular_difference_degrees(v1: Point, v2: Point) -> float:
+    """
+    Compute the minimal unsigned angular difference between two 2D vectors in degrees [0, 180].
+    """
+    len1 = math.hypot(v1[0], v1[1])
+    len2 = math.hypot(v2[0], v2[1])
+    if len1 < 1e-6 or len2 < 1e-6:
+        return 0.0
+    dot = (v1[0] * v2[0] + v1[1] * v2[1]) / (len1 * len2)
+    dot = max(-1.0, min(1.0, dot))
+    return math.degrees(math.acos(dot))
+
+
 def movement_angle_degrees(prev: Point, curr: Point) -> Optional[float]:
     """
     Angle of movement in degrees (0° = right, 90° = up, 180° = left, 270° = down).

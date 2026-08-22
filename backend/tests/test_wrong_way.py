@@ -73,7 +73,7 @@ class TestWrongWayRegression:
             min_frames_tracked=15,
             min_trajectory_points=10,
             sustained_ratio_threshold=0.70,
-            tolerance_angle_degrees=120.0,
+            min_wrong_way_angle_deg=120.0,
             cooldown_seconds=5.0,
         )
 

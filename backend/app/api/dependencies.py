@@ -77,7 +77,7 @@ def get_violation_engine() -> ViolationEngine:
         engine.register(
             WrongWayViolationDetector(
                 severity_engine=severity,
-                expected_direction="right",
+                expected_direction="AUTO",
             )
         )
         # LaneViolationDetector requires lane ROIs — added on session start
