@@ -50,13 +50,13 @@ class HelmetDetector:
     def __init__(
         self,
         model_path: Optional[Union[str, Path]] = None,
-        conf_threshold: float = 0.50,
+        conf_threshold: Optional[float] = None,
         device: Optional[str] = None,
     ) -> None:
         settings = get_settings()
         env_path = os.getenv("HELMET_MODEL_PATH", settings.helmet_model_path or "models/helmet_v2.pt")
         self.model_path = Path(model_path or env_path)
-        self.conf_threshold = conf_threshold
+        self.conf_threshold = conf_threshold if conf_threshold is not None else getattr(settings, "helmet_confidence_threshold", 0.35)
         self.device = device or settings.device
 
         self._model = None

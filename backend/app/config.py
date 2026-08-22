@@ -52,6 +52,7 @@ class Settings(BaseSettings):
 
     # ── Inference Hyperparameters ─────────────────────────────────────────────
     confidence_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
+    helmet_confidence_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
     iou_threshold: float = Field(default=0.45, ge=0.0, le=1.0)
     inference_fps: int = Field(default=10, ge=1, le=120)
     frame_skip: int = Field(default=2, ge=1, le=60)
