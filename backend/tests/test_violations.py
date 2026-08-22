@@ -12,7 +12,7 @@ import pytest
 
 from app.schemas.detection import BoundingBox, TrackedObject
 from app.schemas.violation import (
-    SceneState, TrafficLightState, Violation, ViolationType,
+    SceneState, TrafficLightState, Violation, ViolationType, ViolationSeverity
 )
 from app.violations.geometry import crosses_line
 from app.violations.severity import SeverityEngine
@@ -137,13 +137,12 @@ class TestWrongWayViolationDetector:
 
     def test_wrong_way_left(self):
         """Vehicle moving left when expected direction is right → violation."""
-        # bbox center = (200+250)/2, (300+400)/2 = (225, 350)
-        # trajectory[-2] = (275, 350), trajectory[-1] = (225, 350)
-        # movement: dx = 225-275 = -50 → LEFT
+        # Provide 15 trajectory points moving LEFT (decreasing X)
+        trajectory = [(275 - i * 5, 350) for i in range(15)]
         obj = make_tracked(
             1, 200, 300, 250, 400,
-            trajectory=[(275, 350), (225, 350)],  # Moving left
-            frames_tracked=10,
+            trajectory=trajectory,
+            frames_tracked=15,
         )
         violations = self.detector.evaluate(BLANK_FRAME, [obj], self._scene())
         assert len(violations) == 1
@@ -178,9 +177,9 @@ class TestSeverityEngine:
 
     def test_low_confidence_downgrades(self):
         engine = SeverityEngine()
-        # NO_HELMET base = HIGH, low confidence → MEDIUM
+        # NO_HELMET base = 55, low confidence (<0.5) subtracts 15 -> 40 pts -> LOW
         severity = engine.calculate(ViolationType.NO_HELMET, vehicle_id=1, confidence=0.4)
-        assert severity == "MEDIUM"
+        assert severity == ViolationSeverity.LOW
 
     def test_repeat_offender_escalation(self):
         engine = SeverityEngine()

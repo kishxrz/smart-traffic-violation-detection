@@ -116,10 +116,13 @@ class RedLightViolationDetector(ViolationDetector):
                     continue
 
                 self._last_violation_time[obj.track_id] = now
-                severity = self._severity.calculate(
-                    ViolationType.RED_LIGHT,
-                    obj.track_id,
-                    obj.confidence,
+                violation_confidence = round(0.5 * obj.confidence + 0.5 * 1.0, 4)
+                severity, severity_score, severity_reasons = self._severity.calculate_detailed(
+                    violation_type=ViolationType.RED_LIGHT,
+                    vehicle_id=obj.track_id,
+                    detection_confidence=obj.confidence,
+                    violation_confidence=violation_confidence,
+                    displacement_px=abs(curr[1] - prev[1]),
                 )
 
                 logger.info(
@@ -132,8 +135,12 @@ class RedLightViolationDetector(ViolationDetector):
                         violation_type=ViolationType.RED_LIGHT,
                         vehicle_id=obj.track_id,
                         vehicle_class=obj.class_name,
-                        confidence=obj.confidence,
+                        confidence=violation_confidence,
+                        detection_confidence=obj.confidence,
+                        violation_confidence=violation_confidence,
                         severity=severity,
+                        severity_score=severity_score,
+                        severity_reasons=severity_reasons,
                         frame_number=scene_state.frame_number,
                         timestamp=scene_state.timestamp,
                         metadata={

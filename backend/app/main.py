@@ -94,6 +94,17 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # ── Static Files ─────────────────────────────────────────────────────────
+    evidence_dir = settings.evidence_abs_dir
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / "videos").mkdir(parents=True, exist_ok=True)
+
+    app.mount(
+        "/static/evidence",
+        StaticFiles(directory=str(evidence_dir)),
+        name="evidence",
+    )
+
     # ── Routers ───────────────────────────────────────────────────────────────
     app.include_router(health.router)
     app.include_router(detection.router)

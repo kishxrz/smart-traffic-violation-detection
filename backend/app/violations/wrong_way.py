@@ -3,83 +3,109 @@ backend/app/violations/wrong_way.py
 ─────────────────────────────────────
 Wrong-way driving violation detector.
 
-Algorithm:
-  1. Compute movement vector from prev_center → curr_center.
-  2. Determine dominant direction (left/right/up/down).
-  3. Compare against configured expected direction.
-  4. Apply minimum displacement threshold to filter tracker jitter.
+Screen Coordinate System Documentation:
+  - Origin (0,0) is top-left of the image.
+  - X increases to the RIGHT.
+  - Y increases DOWNWARDS.
 
-Configurable per camera setup:
-  - expected_direction: the legal direction of travel for this road segment.
-  - min_displacement: minimum pixel movement to consider significant.
-  - min_frames_tracked: vehicle must be tracked for N frames before checking
-    (new detections may have unreliable initial trajectories).
+Expected Direction Representation:
+  - String names:
+      "RIGHT": vector (1.0, 0.0)
+      "LEFT" : vector (-1.0, 0.0)
+      "DOWN" : vector (0.0, 1.0)
+      "UP"   : vector (0.0, -1.0)
+  - Custom vector tuple: expected_direction_vector = (ex, ey)
 
-Why not use angle directly?
-  For most straight roads, dominant direction analysis is more robust
-  than angle thresholds. Angle-based detection is available via
-  geometry.movement_angle_degrees() for diagonal roads.
+Algorithm & Safeguards:
+  1. Filter out non-vehicle classes and recently created tracks (< min_frames_tracked).
+  2. Ensure sufficient trajectory history points (>= min_trajectory_points).
+  3. Verify net displacement exceeds min_displacement_px to ignore stationary jitter.
+  4. Evaluate direction consistency across recent trajectory segments.
+  5. Compute cosine of angle between movement vectors and expected direction.
+  6. Require sustained wrong-way movement ratio >= sustained_ratio_threshold.
+  7. Calculate transparent rule-based violation_confidence and explainable severity.
+  8. Apply cooldown de-duplication per vehicle track ID.
 """
 
 from __future__ import annotations
 
+import math
 import logging
 import time
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 
 from app.schemas.detection import TrackedObject
-from app.schemas.violation import SceneState, Violation, ViolationType
+from app.schemas.violation import SceneState, Violation, ViolationSeverity, ViolationType
 from app.violations.base import ViolationDetector
-from app.violations.geometry import movement_direction
 from app.violations.severity import SeverityEngine
 
 logger = logging.getLogger(__name__)
 
 VEHICLE_CLASS_IDS: Set[int] = {2, 3, 5, 7}  # car, motorcycle, bus, truck
 
-# Legal directions and their opposites
-OPPOSITE_DIRECTIONS = {
-    "left": "right",
-    "right": "left",
-    "up": "down",
-    "down": "up",
+# Named directions mapped to unit vectors (Screen Coordinates: +X right, +Y down)
+DIRECTION_VECTORS: Dict[str, Tuple[float, float]] = {
+    "RIGHT": (1.0, 0.0),
+    "LEFT": (-1.0, 0.0),
+    "DOWN": (0.0, 1.0),
+    "UP": (0.0, -1.0),
 }
+
+
+def parse_direction_vector(
+    direction: Union[str, Tuple[float, float]]
+) -> Tuple[float, float]:
+    """Convert string name or tuple to normalized direction vector."""
+    if isinstance(direction, str):
+        name = direction.upper()
+        if name in DIRECTION_VECTORS:
+            return DIRECTION_VECTORS[name]
+        raise ValueError(f"Unknown direction name '{direction}'. Valid: {list(DIRECTION_VECTORS.keys())}")
+    
+    vx, vy = float(direction[0]), float(direction[1])
+    mag = math.hypot(vx, vy)
+    if mag == 0:
+        raise ValueError("Expected direction vector cannot be zero length.")
+    return (vx / mag, vy / mag)
 
 
 class WrongWayViolationDetector(ViolationDetector):
     """
-    Detects vehicles moving in the wrong direction.
+    Detects vehicles moving in the wrong direction with trajectory safeguards.
     """
 
     def __init__(
         self,
         severity_engine: SeverityEngine,
-        expected_direction: str = "right",
-        min_displacement_px: float = 5.0,
-        min_frames_tracked: int = 5,
-        cooldown_seconds: float = 4.0,
+        expected_direction: Union[str, Tuple[float, float]] = "RIGHT",
+        min_displacement_px: float = 30.0,
+        min_frames_tracked: int = 15,
+        min_trajectory_points: int = 10,
+        sustained_ratio_threshold: float = 0.70,
+        tolerance_angle_degrees: float = 120.0,
+        cooldown_seconds: float = 5.0,
     ) -> None:
         """
         Args:
-            severity_engine:     Shared severity calculator.
-            expected_direction:  Legal direction of travel: "left"|"right"|"up"|"down".
-            min_displacement_px: Minimum movement to trigger direction check.
-                                 Prevents jitter in stopped vehicles from triggering.
-            min_frames_tracked:  Skip recently-appeared vehicles whose trajectory
-                                 is not yet reliable.
-            cooldown_seconds:    Minimum seconds between violation records for
-                                 the same vehicle.
+            severity_engine:           Shared severity engine instance.
+            expected_direction:        Legal travel direction ("RIGHT", "LEFT", "UP", "DOWN" or (ex, ey)).
+            min_displacement_px:       Minimum net pixel displacement over tracking history.
+            min_frames_tracked:        Minimum frames tracked before checking (ignores newly created tracks).
+            min_trajectory_points:     Minimum trajectory points required.
+            sustained_ratio_threshold: Fraction of trajectory steps that must be wrong-way (e.g. 0.70).
+            tolerance_angle_degrees:   Angle threshold (e.g. >120° deviation from legal direction = wrong way).
+            cooldown_seconds:          Cooldown seconds per vehicle ID to avoid duplicate alerts.
         """
-        if expected_direction not in OPPOSITE_DIRECTIONS:
-            raise ValueError(
-                f"expected_direction must be one of {list(OPPOSITE_DIRECTIONS.keys())}"
-            )
         self._severity = severity_engine
-        self._expected_direction = expected_direction
+        self._expected_direction_raw = expected_direction
+        self._expected_vector = parse_direction_vector(expected_direction)
         self._min_displacement = min_displacement_px
         self._min_frames_tracked = min_frames_tracked
+        self._min_trajectory_points = min_trajectory_points
+        self._sustained_ratio_threshold = sustained_ratio_threshold
+        self._cos_threshold = math.cos(math.radians(tolerance_angle_degrees))
         self._cooldown = cooldown_seconds
         self._last_violation_time: Dict[int, float] = {}
 
@@ -95,41 +121,96 @@ class WrongWayViolationDetector(ViolationDetector):
     ) -> List[Violation]:
         violations: List[Violation] = []
 
-        expected = scene_state.expected_direction or self._expected_direction
+        # Allow scene state to override expected direction if configured
+        expected_vector = self._expected_vector
+        if scene_state.expected_direction:
+            try:
+                expected_vector = parse_direction_vector(scene_state.expected_direction)
+            except Exception as err:
+                logger.warning("Invalid scene_state expected direction '%s': %s", scene_state.expected_direction, err)
+
+        ex, ey = expected_vector
 
         for obj in tracked_objects:
             if obj.class_id not in VEHICLE_CLASS_IDS:
                 continue
 
+            # Safeguard 1: Ignore newly created tracks (< min_frames_tracked)
             if obj.frames_tracked < self._min_frames_tracked:
                 continue
 
-            prev = obj.prev_center
-            if prev is None:
+            # Safeguard 2: Ignore tracks with insufficient trajectory history
+            if len(obj.trajectory) < self._min_trajectory_points:
                 continue
 
-            direction = movement_direction(
-                prev, obj.center, min_displacement=self._min_displacement
-            )
-            if direction is None:
-                continue  # Not enough movement
+            # Trajectory window to analyze
+            window = obj.trajectory[-self._min_trajectory_points:]
+            start_pt = window[0]
+            curr_pt = window[-1]
 
-            wrong_way = direction == OPPOSITE_DIRECTIONS.get(expected)
-            if not wrong_way:
+            # Safeguard 3: Minimum net displacement check
+            dx = curr_pt[0] - start_pt[0]
+            dy = curr_pt[1] - start_pt[1]
+            net_displacement = math.hypot(dx, dy)
+
+            if net_displacement < self._min_displacement:
+                continue  # Stationary or jittering vehicle
+
+            # Safeguard 4: Evaluate trajectory segment vectors
+            wrong_way_steps = 0
+            total_steps = 0
+
+            for i in range(1, len(window)):
+                p_prev = window[i - 1]
+                p_curr = window[i]
+                step_dx = p_curr[0] - p_prev[0]
+                step_dy = p_curr[1] - p_prev[1]
+                step_len = math.hypot(step_dx, step_dy)
+
+                if step_len < 1.5:
+                    continue  # Ignore tiny frame-to-frame noise steps
+
+                total_steps += 1
+                # Cosine of angle between step vector and legal direction vector
+                cos_theta = (step_dx * ex + step_dy * ey) / (step_len * 1.0)
+                if cos_theta <= self._cos_threshold or cos_theta < 0:
+                    wrong_way_steps += 1
+
+            if total_steps == 0:
                 continue
 
+            sustained_ratio = wrong_way_steps / total_steps
+            if sustained_ratio < self._sustained_ratio_threshold:
+                continue  # Not sustained wrong-way movement
+
+            # Safeguard 5: Cooldown check
             now = time.time()
             if self._is_on_cooldown(obj.track_id, now):
                 continue
 
-            self._last_violation_time[obj.track_id] = now
-            severity = self._severity.calculate(
-                ViolationType.WRONG_WAY, obj.track_id, obj.confidence
+            # Calculate rule-based violation confidence
+            # Formula: 0.3 * detection_conf + 0.3 * min(1.0, net_displacement / (2 * min_disp)) + 0.4 * sustained_ratio
+            disp_ratio = min(1.0, net_displacement / (self._min_displacement * 2.0))
+            violation_confidence = round(
+                0.3 * obj.confidence + 0.3 * disp_ratio + 0.4 * sustained_ratio,
+                4,
             )
 
+            # Calculate severity score & explanation
+            severity, severity_score, severity_reasons = self._severity.calculate_detailed(
+                violation_type=ViolationType.WRONG_WAY,
+                vehicle_id=obj.track_id,
+                detection_confidence=obj.confidence,
+                violation_confidence=violation_confidence,
+                displacement_px=net_displacement,
+                sustained_frames=len(window),
+            )
+
+            self._last_violation_time[obj.track_id] = now
+
             logger.info(
-                "WRONG WAY violation: vehicle #%d (%s) moving %s (expected: %s)",
-                obj.track_id, obj.class_name, direction, expected,
+                "WRONG WAY violation detected: vehicle #%d (%s), net disp=%.1fpx, sustained=%.0f%%, severity=%s (%d pts)",
+                obj.track_id, obj.class_name, net_displacement, sustained_ratio * 100, severity.value, severity_score,
             )
 
             violations.append(
@@ -137,20 +218,22 @@ class WrongWayViolationDetector(ViolationDetector):
                     violation_type=ViolationType.WRONG_WAY,
                     vehicle_id=obj.track_id,
                     vehicle_class=obj.class_name,
-                    confidence=obj.confidence,
+                    confidence=violation_confidence,  # For backward compatibility
+                    detection_confidence=obj.confidence,
+                    violation_confidence=violation_confidence,
                     severity=severity,
+                    severity_score=severity_score,
+                    severity_reasons=severity_reasons,
                     frame_number=scene_state.frame_number,
                     timestamp=scene_state.timestamp,
                     metadata={
-                        "detected_direction": direction,
-                        "expected_direction": expected,
-                        "prev_center": list(prev),
-                        "curr_center": list(obj.center),
-                        "displacement_px": (
-                            (obj.center[0] - prev[0]) ** 2
-                            + (obj.center[1] - prev[1]) ** 2
-                        )
-                        ** 0.5,
+                        "expected_direction_vector": [ex, ey],
+                        "net_displacement_px": round(net_displacement, 2),
+                        "sustained_wrong_ratio": round(sustained_ratio, 2),
+                        "total_trajectory_points": len(obj.trajectory),
+                        "analyzed_window_points": len(window),
+                        "start_center": list(start_pt),
+                        "curr_center": list(curr_pt),
                     },
                 )
             )

@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field
 
@@ -46,8 +46,12 @@ class Violation(BaseModel):
     violation_type: ViolationType
     vehicle_id: int
     vehicle_class: str
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0, description="Deprecated alias for violation_confidence")
+    detection_confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="YOLO object detection confidence")
+    violation_confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Rule-based violation confidence score")
     severity: ViolationSeverity
+    severity_score: int = Field(default=50, ge=0, le=100, description="Numeric severity score 0-100")
+    severity_reasons: List[str] = Field(default_factory=list, description="Transparent explanations for severity level")
     frame_number: int
     timestamp: float              # seconds since video start
     detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -71,7 +75,7 @@ class SceneState(BaseModel):
 
     # Configurable scene parameters (set per analysis session)
     stop_line_y: Optional[float] = None        # pixel Y coordinate
-    expected_direction: Optional[str] = None   # "left" | "right" | "up" | "down"
+    expected_direction: Optional[Union[str, Tuple[float, float]]] = None   # "LEFT" | "RIGHT" | "UP" | "DOWN" or (ex, ey)
     lane_count: int = 1
 
 

@@ -190,9 +190,28 @@ async def detect_video(
     all_violations = []
     frames_processed = 0
 
+    # Annotated video output path
+    videos_dir = settings.evidence_abs_dir / "videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    video_filename = f"annotated_{session_id}.mp4"
+    video_output_path = videos_dir / video_filename
+    video_writer = None
+
+    from app.cv.visualization import draw_tracked_object, draw_hud
+
     try:
         with VideoProcessor(tmp_path, frame_skip=settings.frame_skip) as vp:
             metadata = vp.metadata
+
+            if metadata and metadata.width and metadata.height:
+                output_fps = (metadata.fps or 25.0) / settings.frame_skip
+                video_writer = VideoProcessor.create_writer(
+                    output_path=video_output_path,
+                    fps=output_fps,
+                    width=metadata.width,
+                    height=metadata.height,
+                )
+
             for frame_num, ts, frame in vp.frames():
                 frame_result = frame_processor.process(frame, frame_num, ts)
 
@@ -207,18 +226,38 @@ async def detect_video(
                     scene_state,
                 )
 
-                # Save evidence
+                # Save evidence snapshots
                 tracked_by_id = {t.track_id: t for t in frame_result.tracked_objects}
                 evidence_gen.save_batch(frame, violations, tracked_by_id)
+
+                # Render annotations for video output
+                annotated = frame.copy()
+                for obj in frame_result.tracked_objects:
+                    viol_types = [v.violation_type for v in violations if v.vehicle_id == obj.track_id]
+                    annotated = draw_tracked_object(annotated, obj, viol_types)
+                
+                annotated = draw_hud(
+                    annotated,
+                    fps=metadata.fps / settings.frame_skip if metadata else 25.0,
+                    frame_number=frame_num,
+                    vehicle_count=len(frame_result.tracked_objects),
+                    violation_count=len(all_violations) + len(violations),
+                )
+
+                if video_writer:
+                    video_writer.write(annotated)
 
                 analytics.update(frame_result, violations)
                 all_violations.extend(violations)
                 frames_processed += 1
 
     finally:
+        if video_writer:
+            video_writer.release()
         Path(tmp_path).unlink(missing_ok=True)
 
     summary = analytics.build_summary()
+    has_video = video_output_path.exists() and video_output_path.stat().st_size > 0
 
     return {
         "session_id": session_id,
@@ -228,7 +267,9 @@ async def detect_video(
             "width": metadata.width if metadata else None,
             "height": metadata.height if metadata else None,
             "total_frames": metadata.total_frames if metadata else None,
+            "duration_seconds": round(metadata.total_frames / metadata.fps, 1) if (metadata and metadata.fps and metadata.total_frames) else None,
         },
+        "annotated_video_url": f"/static/evidence/videos/{video_filename}" if has_video else None,
         "violations": [v.model_dump() for v in all_violations],
         "summary": {
             "total_vehicles": summary.total_vehicles_detected,
