@@ -1,0 +1,141 @@
+# ============================================================
+# Smart Traffic Intelligence & Violation Detection System
+# .gitignore
+# ============================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual Environments ---
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Secrets & Configuration ---
+.env
+.env.local
+.env.production
+.env.*.local
+*.secret
+secrets.yaml
+secrets.json
+
+# --- ML Models (often large binaries) ---
+models/*.pt
+models/*.onnx
+models/*.pth
+models/*.h5
+models/*.pb
+models/*.tflite
+models/*.torchscript
+*.pt
+*.onnx
+*.pth
+
+# --- Datasets & Large Data ---
+datasets/
+*.zip
+*.tar
+*.tar.gz
+*.tar.bz2
+
+# --- Generated Evidence & Media ---
+evidence/
+output/
+*.mp4
+*.avi
+*.mov
+*.mkv
+sample_data/*.mp4
+sample_data/*.avi
+sample_data/*.jpg
+sample_data/*.png
+
+# --- Logs ---
+logs/
+*.log
+*.log.*
+
+# --- Database ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Node.js ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+lerna-debug.log*
+
+# --- Next.js ---
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# --- Testing & Coverage ---
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+.tox/
+.nox/
+*.cover
+*.py,cover
+.hypothesis/
+junit*.xml
+
+# --- Type Checking ---
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyright/
+
+# --- IDEs ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Docker ---
+.docker/
+
+# --- Jupyter ---
+.ipynb_checkpoints
+*.ipynb
+
+# --- Temporary Files ---
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig

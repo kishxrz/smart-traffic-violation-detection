@@ -1,0 +1,42 @@
+# ============================================================
+# Smart Traffic AI — Backend Python Dependencies
+# ============================================================
+# Pinned versions for reproducible builds.
+# Run: pip install -r requirements.txt
+
+# --- Core Web Framework ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.12   # Required for UploadFile
+
+# --- Configuration ---
+pydantic==2.9.2
+pydantic-settings==2.5.2
+
+# --- Computer Vision ---
+opencv-python==4.10.0.84
+numpy==2.1.1
+
+# --- Deep Learning (YOLO via PyTorch) ---
+ultralytics==8.3.0         # Includes PyTorch as a dependency
+# torch and torchvision are installed by ultralytics
+# For CUDA: install torch with the appropriate CUDA version separately:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# --- Optimization ---
+scipy==1.14.1              # Hungarian algorithm for object tracking
+
+# --- Database (optional) ---
+sqlalchemy==2.0.35
+aiosqlite==0.20.0          # SQLite async driver (development/local)
+# asyncpg==0.30.0          # Uncomment for PostgreSQL
+
+# --- Development / Testing ---
+pytest==8.3.3
+pytest-asyncio==0.24.0
+httpx==0.27.2              # Async HTTP client for testing FastAPI
+pytest-cov==5.0.0
+
+# --- Code Quality ---
+ruff==0.7.0
+mypy==1.13.0
