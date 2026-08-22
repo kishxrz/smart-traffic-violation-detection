@@ -66,7 +66,7 @@ Next.js Dashboard (app/page.tsx)
 ### Violation Detection
 | Violation | Implementation | Model Required |
 |-----------|---------------|----------------|
-| **No Helmet** | Motorcycle + person association + helmet classifier | Custom helmet model (stub provided) |
+| **No Helmet** | Spatial rider ↔ motorcycle associator + custom head crop YOLO model + temporal evidence aggregation | Custom YOLO Helmet Model (`models/helmet_v1.pt`) |
 | **Red Light** | Stop-line crossing while light is RED | COCO YOLO (traffic light bbox) + color analysis |
 | **Wrong Way** | Movement vector vs configured expected direction | COCO YOLO |
 | **Lane Violation** | Vehicle center leaves lane polygon | COCO YOLO |

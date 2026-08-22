@@ -144,9 +144,19 @@ def draw_violation_overlay(
             f"Vehicle #{violation.vehicle_id}",
             f"Conf: {violation.confidence:.2f}  Sev: {violation.severity}",
         ]
-        y_text = max(y1 - 10, 60)
+
+        if "rider_id" in violation.metadata:
+            lines.append(f"Rider #{violation.metadata['rider_id']}")
+
+        y_text = max(y1 - 10, 80)
         for i, line in enumerate(lines):
             _draw_label(out, line, (x1, y_text - i * 18), sev_color, font_scale=0.45)
+
+        # Draw head ROI if present in metadata
+        if "head_roi_bbox" in violation.metadata:
+            hx1, hy1, hx2, hy2 = violation.metadata["head_roi_bbox"]
+            cv2.rectangle(out, (int(hx1), int(hy1)), (int(hx2), int(hy2)), COLOR_WARNING, 2)
+            _draw_label(out, "HEAD ROI [NO HELMET]", (int(hx1), int(hy1)), COLOR_WARNING, font_scale=0.40)
 
     # Timestamp banner at top
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
