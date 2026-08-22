@@ -3,16 +3,13 @@ scripts/evaluate_helmet.py
 ───────────────────────────
 Model evaluation script for Custom YOLO Helmet Detector.
 
-Reports REAL metrics only:
-  - Precision
-  - Recall
-  - mAP@50
-  - mAP@50:95
-  - Confusion Matrix
-  - Inference Latency (ms) & FPS
+Evaluates against the held-out TEST split (datasets/helmet_binary/images/test).
 
-Usage:
-    python scripts/evaluate_helmet.py --model models/helmet_v1.pt --data datasets/helmet/data.yaml
+Reports REAL metrics only:
+  - Precision & Recall
+  - mAP@50 & mAP@50:95
+  - Per-class metrics (helmet vs no_helmet)
+  - Inference Latency (ms) & FPS benchmark
 """
 
 from __future__ import annotations
@@ -43,7 +40,7 @@ def measure_latency(model_path: str, n_runs: int = 30) -> dict:
 
     logger.info("Benchmarking model latency: %s", model_path)
     model = YOLO(model_path)
-    dummy_crop = np.zeros((128, 128, 3), dtype=np.uint8)
+    dummy_crop = np.zeros((320, 320, 3), dtype=np.uint8)
 
     # Warmup
     for _ in range(5):
@@ -66,7 +63,7 @@ def measure_latency(model_path: str, n_runs: int = 30) -> dict:
 
 
 def evaluate_model(model_path: str, data_yaml: str, device: str = "cpu") -> None:
-    """Run Ultralytics validation on test/val set."""
+    """Run Ultralytics validation on held-out TEST set."""
     yaml_path = Path(data_yaml)
     if not yaml_path.exists():
         logger.error("Dataset YAML not found at: %s", yaml_path)
@@ -75,7 +72,6 @@ def evaluate_model(model_path: str, data_yaml: str, device: str = "cpu") -> None
     model_file = Path(model_path)
     if not model_file.exists():
         logger.error("Model file not found at: %s", model_file)
-        logger.info("To train a custom model: python scripts/train_helmet.py")
         return
 
     try:
@@ -84,24 +80,35 @@ def evaluate_model(model_path: str, data_yaml: str, device: str = "cpu") -> None
         logger.error("ultralytics not installed.")
         sys.exit(1)
 
-    logger.info("Evaluating model %s on %s", model_path, data_yaml)
-    model = YOLO(model_path)
-    results = model.val(data=data_yaml, device=device, verbose=True)
+    logger.info("Evaluating model %s on TEST split of %s", model_path, data_yaml)
+    model = YOLO(str(model_file))
+    results = model.val(data=str(yaml_path), split="test", device=device, verbose=True)
 
     print("\n" + "=" * 60)
-    print(" MODEL METRICS (CUSTOM HELMET DETECTOR)")
+    print(" MODEL TEST SET EVALUATION METRICS")
     print("=" * 60)
-    print(f" mAP@50    : {results.box.map50:.4f}")
-    print(f" mAP@50:95 : {results.box.map:.4f}")
-    print(f" Precision : {results.box.mp:.4f}")
-    print(f" Recall    : {results.box.mr:.4f}")
+    print(f" Overall mAP@50    : {results.box.map50:.4f}")
+    print(f" Overall mAP@50:95 : {results.box.map:.4f}")
+    print(f" Overall Precision : {results.box.mp:.4f}")
+    print(f" Overall Recall    : {results.box.mr:.4f}")
+    print("-" * 60)
+
+    # Class-wise metrics
+    names = results.names
+    for i, cls_name in names.items():
+        if i < len(results.box.p):
+            p = results.box.p[i]
+            r = results.box.r[i]
+            ap50 = results.box.ap50[i]
+            print(f" Class [{cls_name.upper()}]: Precision={p:.4f}, Recall={r:.4f}, AP@50={ap50:.4f}")
+
     print("=" * 60)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate Custom YOLO Helmet Detector.")
     parser.add_argument("--model", default="models/helmet_v1.pt", help="Path to trained model weights")
-    parser.add_argument("--data", default="datasets/helmet/data.yaml", help="Path to data.yaml")
+    parser.add_argument("--data", default="datasets/helmet_binary/data.yaml", help="Path to data.yaml")
     parser.add_argument("--device", default="cpu", help="cpu | cuda | mps")
     args = parser.parse_args()
 

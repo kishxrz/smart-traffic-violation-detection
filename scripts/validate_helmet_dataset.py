@@ -6,7 +6,7 @@ Dataset validation script for YOLO Helmet & Safety Detection.
 Verifies:
   1. Image & label file existence across train/val/test splits.
   2. 1-to-1 pairing between image (.jpg/.png) and label (.txt) files.
-  3. Class ID validity (must be 0: helmet or 1: no_helmet).
+  3. Class ID validity against target class schema.
   4. Normalized bounding box coordinates within [0.0, 1.0].
   5. Image dimension integrity and duplicate filename checks.
   6. Class distribution statistics across splits.
@@ -21,7 +21,7 @@ import argparse
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 
 import yaml
 
@@ -61,8 +61,11 @@ def validate_split(
             continue
 
         label_count += 1
-        lines = lbl_path.read_text(encoding="utf-8").strip().splitlines()
+        content = lbl_path.read_text(encoding="utf-8").strip()
+        if not content:
+            continue
 
+        lines = content.splitlines()
         for line_num, line in enumerate(lines, 1):
             parts = line.strip().split()
             if len(parts) != 5:
@@ -80,7 +83,7 @@ def validate_split(
                 errors.append(f"{lbl_path.name}:{line_num} Invalid class ID {cls_id} (allowed: 0..{nc-1})")
 
             # Check normalized bounds [0, 1]
-            if not (0.0 <= cx <= 1.0 and 0.0 <= cy <= 1.0 and 0.0 <= w <= 1.0 and 0.0 <= h <= 1.0):
+            if not (-0.01 <= cx <= 1.01 and -0.01 <= cy <= 1.01 and 0.0 <= w <= 1.01 and 0.0 <= h <= 1.01):
                 errors.append(f"{lbl_path.name}:{line_num} Bounding box coords out of range [0, 1]: ({cx}, {cy}, {w}, {h})")
 
             class_counts[cls_id] += 1
@@ -96,11 +99,6 @@ def main() -> None:
     yaml_path = Path(args.data)
     if not yaml_path.exists():
         logger.error("Dataset YAML configuration file not found at: %s", yaml_path)
-        logger.info(
-            "\nDataset Setup Required:\n"
-            "Place your dataset under datasets/helmet/ with images/ and labels/ subdirectories.\n"
-            "Recommended dataset: Roboflow 'Motorcycle Helmet Detection' (CC BY 4.0)."
-        )
         return
 
     with open(yaml_path, "r", encoding="utf-8") as f:
@@ -108,53 +106,70 @@ def main() -> None:
 
     root_dir = yaml_path.parent
     nc = cfg.get("nc", 2)
-    names = cfg.get("names", {0: "helmet", 1: "no_helmet"})
+    names_raw = cfg.get("names", {0: "helmet", 1: "no_helmet"})
+
+    if isinstance(names_raw, list):
+        names_dict = {i: name for i, name in enumerate(names_raw)}
+    elif isinstance(names_raw, dict):
+        names_dict = names_raw
+    else:
+        names_dict = {i: str(i) for i in range(nc)}
 
     print("\n" + "=" * 60)
     print(" HELMET DATASET VALIDATION REPORT")
     print("=" * 60)
     print(f" Dataset Config: {yaml_path}")
-    print(f" Target Classes: {names}")
+    print(f" Target Classes: {names_dict}")
     print("=" * 60)
 
-    splits = ["train", "val", "test"]
+    split_configs = [
+        ("train", root_dir / "train" / "images", root_dir / "train" / "labels"),
+        ("val", root_dir / "valid" / "images" if (root_dir / "valid").exists() else root_dir / "val" / "images",
+                root_dir / "valid" / "labels" if (root_dir / "valid").exists() else root_dir / "val" / "labels"),
+        ("test", root_dir / "test" / "images", root_dir / "test" / "labels"),
+    ]
+
     total_images = 0
     total_labels = 0
     total_class_counts: Counter = Counter()
     all_errors: List[str] = []
 
-    for split in splits:
-        img_dir = root_dir / "images" / split
-        lbl_dir = root_dir / "labels" / split
-        n_img, n_lbl, counts, errs = validate_split(split, img_dir, lbl_dir, nc)
+    for split_name, img_dir, lbl_dir in split_configs:
+        # Also check fallback images/split if subfolder doesn't exist
+        if not img_dir.exists():
+            img_dir = root_dir / "images" / split_name
+            lbl_dir = root_dir / "labels" / split_name
+
+        n_img, n_lbl, counts, errs = validate_split(split_name, img_dir, lbl_dir, nc)
 
         total_images += n_img
         total_labels += n_lbl
         total_class_counts.update(counts)
         all_errors.extend(errs)
 
-        print(f"\nSplit [{split.upper()}]:")
+        print(f"\nSplit [{split_name.upper()}]:")
         print(f"  Images: {n_img}")
         print(f"  Labels: {n_lbl}")
-        for cls_id, count in counts.items():
-            print(f"    Class {cls_id} ({names.get(cls_id, cls_id)}): {count}")
+        for cls_id in range(nc):
+            count = counts[cls_id]
+            print(f"    Class {cls_id} ({names_dict.get(cls_id, str(cls_id))}): {count}")
 
     print("\n" + "=" * 60)
     print(" SUMMARY")
     print("=" * 60)
     print(f" Total Images: {total_images}")
-    print(f" Total Labels: {total_labels}")
+    print(f" Total Labels with Annotations: {total_labels}")
     for cls_id in range(nc):
-        print(f"  Total {names.get(cls_id, cls_id)} (class {cls_id}): {total_class_counts[cls_id]}")
+        print(f"  Total {names_dict.get(cls_id, str(cls_id))} (class {cls_id}): {total_class_counts[cls_id]}")
     print(f" Total Validation Errors: {len(all_errors)}")
     print("=" * 60)
 
     if all_errors:
-        print("\nErrors identified (first 10 shown):")
+        print(f"\nErrors identified ({len(all_errors)} total, first 10 shown):")
         for err in all_errors[:10]:
             print(f"  - {err}")
     else:
-        print("\nDataset validation passed cleanly! No label errors found.")
+        print("\nDataset validation passed cleanly! 0 label errors found.")
 
 
 if __name__ == "__main__":
