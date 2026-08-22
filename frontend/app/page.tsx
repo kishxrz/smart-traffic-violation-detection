@@ -303,11 +303,11 @@ export default function Dashboard() {
           <div className="space-y-6">
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
               <StatCard
-                title="Vehicles Detected"
+                title="OBJECT DETECTIONS"
                 value={summary?.total_vehicles_detected ?? '—'}
                 icon={Car}
                 color="#3b82f6"
-                subtitle="Total detections"
+                subtitle="Total detections across frames"
               />
               <StatCard
                 title="Unique Tracked"
@@ -489,9 +489,14 @@ export default function Dashboard() {
                     <div className="relative rounded-lg overflow-hidden border border-[#2a3550] bg-black">
                       <video
                         controls
+                        preload="metadata"
                         src={`${API_BASE}${videoResult.annotated_video_url}`}
                         className="w-full max-h-[480px] object-contain"
-                      />
+                      >
+                        <div className="p-4 text-center text-xs text-red-400">
+                          Unable to load annotated video. Check backend video generation/encoding.
+                        </div>
+                      </video>
                     </div>
                   </div>
                 )}
@@ -505,7 +510,7 @@ export default function Dashboard() {
                       <p className="text-xl font-bold text-slate-100 mt-1">{videoResult.frames_processed}</p>
                     </div>
                     <div className="bg-[#0a0e1a] border border-[#2a3550] rounded-lg p-3">
-                      <p className="text-[11px] text-slate-400 uppercase font-medium">Vehicles Detected</p>
+                      <p className="text-[11px] text-slate-400 uppercase font-medium">Object Detections</p>
                       <p className="text-xl font-bold text-blue-400 mt-1">{videoResult.summary.total_vehicles}</p>
                     </div>
                     <div className="bg-[#0a0e1a] border border-[#2a3550] rounded-lg p-3">

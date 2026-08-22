@@ -190,14 +190,16 @@ async def detect_video(
     all_violations = []
     frames_processed = 0
 
-    # Annotated video output path
+    # Annotated video output path setup
     videos_dir = settings.evidence_abs_dir / "videos"
     videos_dir.mkdir(parents=True, exist_ok=True)
+    temp_raw_path = videos_dir / f"raw_temp_{session_id}.mp4"
     video_filename = f"annotated_{session_id}.mp4"
     video_output_path = videos_dir / video_filename
     video_writer = None
 
     from app.cv.visualization import draw_tracked_object, draw_hud
+    from app.cv.video_encoder import encode_to_browser_mp4, validate_video_file
 
     try:
         with VideoProcessor(tmp_path, frame_skip=settings.frame_skip) as vp:
@@ -206,7 +208,7 @@ async def detect_video(
             if metadata and metadata.width and metadata.height:
                 output_fps = (metadata.fps or 25.0) / settings.frame_skip
                 video_writer = VideoProcessor.create_writer(
-                    output_path=video_output_path,
+                    output_path=temp_raw_path,
                     fps=output_fps,
                     width=metadata.width,
                     height=metadata.height,
@@ -254,10 +256,22 @@ async def detect_video(
     finally:
         if video_writer:
             video_writer.release()
+            video_writer = None
         Path(tmp_path).unlink(missing_ok=True)
 
+    # Transcode OpenCV video to browser-compatible H.264 MP4
+    annotated_video_url = None
+    if temp_raw_path.exists() and temp_raw_path.stat().st_size > 1000:
+        try:
+            final_path = encode_to_browser_mp4(temp_raw_path, video_output_path)
+            valid_meta = validate_video_file(final_path)
+            annotated_video_url = f"/static/evidence/videos/{final_path.name}"
+            logger.info("Annotated video validated and ready for browser playback: %s", valid_meta)
+        except Exception as val_err:
+            logger.error("Video validation failed: %s", val_err)
+            annotated_video_url = None
+
     summary = analytics.build_summary()
-    has_video = video_output_path.exists() and video_output_path.stat().st_size > 0
 
     return {
         "session_id": session_id,
@@ -269,7 +283,7 @@ async def detect_video(
             "total_frames": metadata.total_frames if metadata else None,
             "duration_seconds": round(metadata.total_frames / metadata.fps, 1) if (metadata and metadata.fps and metadata.total_frames) else None,
         },
-        "annotated_video_url": f"/static/evidence/videos/{video_filename}" if has_video else None,
+        "annotated_video_url": annotated_video_url,
         "violations": [v.model_dump() for v in all_violations],
         "summary": {
             "total_vehicles": summary.total_vehicles_detected,
