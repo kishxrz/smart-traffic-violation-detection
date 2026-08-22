@@ -4,17 +4,9 @@ backend/app/violations/rider_association.py
 Spatial association module connecting motorcycle riders with their vehicles.
 
 Problem solved:
-  Running helmet classification indiscriminately across an entire video frame leads to
-  high false-positive rates (e.g., pedestrians walking near a street, bystanders).
-  A helmet violation must strictly evaluate a PERSON riding a MOTORCYCLE.
-
-Algorithm:
-  For each detected motorcycle:
-    1. Filter person detections with horizontal IoU >= min_horizontal_overlap.
-    2. Check vertical alignment: person's center Y must be above motorcycle top edge + padding.
-    3. Calculate composite association confidence score based on horizontal overlap
-       and spatial proximity.
-    4. Select top associated rider(s) for the motorcycle.
+  1. Explicit Rider Association: Connects separate 'person' (COCO 0) tracks with 'motorcycle' (COCO 3) tracks.
+  2. Implicit Rider ROI Extraction: When general YOLO detects motorcycle + rider as a single 'motorcycle' bounding box
+     (without a separate 'person' box), extracts the upper rider region (upper 65% of motorcycle box).
 
 Returns structured RiderAssociation objects containing:
   - motorcycle_track_id
@@ -26,7 +18,6 @@ Returns structured RiderAssociation objects containing:
 
 from __future__ import annotations
 
-import math
 import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -51,7 +42,7 @@ class RiderAssociation:
 
     @property
     def head_roi_bbox(self) -> BoundingBox:
-        """Estimate head ROI (upper ~30% of rider bounding box)."""
+        """Estimate head ROI (upper ~35% of rider bounding box)."""
         x1, y1, x2, y2 = self.rider_bbox.to_xyxy()
         height = max(1, y2 - y1)
         head_y2 = y1 + int(height * 0.35)
@@ -68,10 +59,12 @@ class RiderAssociator:
         min_horizontal_overlap: float = 0.30,
         vertical_range_px: float = 140.0,
         min_association_confidence: float = 0.40,
+        allow_motorcycle_crop_fallback: bool = True,
     ) -> None:
         self.min_horizontal_overlap = min_horizontal_overlap
         self.vertical_range_px = vertical_range_px
         self.min_association_confidence = min_association_confidence
+        self.allow_motorcycle_crop_fallback = allow_motorcycle_crop_fallback
 
     def associate(
         self,
@@ -86,8 +79,8 @@ class RiderAssociator:
         Returns:
             List of RiderAssociation objects.
         """
-        motorcycles = [o for o in tracked_objects if o.class_id == CLASS_MOTORCYCLE]
-        persons = [o for o in tracked_objects if o.class_id == CLASS_PERSON]
+        motorcycles = [o for o in tracked_objects if o.class_id == CLASS_MOTORCYCLE or o.class_name == "motorcycle"]
+        persons = [o for o in tracked_objects if o.class_id == CLASS_PERSON or o.class_name == "person"]
 
         associations: List[RiderAssociation] = []
 
@@ -133,6 +126,22 @@ class RiderAssociator:
                         association_confidence=best_score,
                         motorcycle_bbox=moto.bbox,
                         rider_bbox=best_rider.bbox,
+                    )
+                )
+            elif self.allow_motorcycle_crop_fallback:
+                # Fallback: Extract rider ROI from upper 65% of motorcycle box
+                # when general YOLO detects motorcycle + rider as a single box
+                moto_h = max(1, moto_y2 - moto_y1)
+                rider_y2 = moto_y1 + int(moto_h * 0.65)
+                rider_bbox = BoundingBox(x1=moto_x1, y1=moto_y1, x2=moto_x2, y2=rider_y2)
+
+                associations.append(
+                    RiderAssociation(
+                        motorcycle_id=moto.track_id,
+                        rider_id=10000 + moto.track_id,
+                        association_confidence=0.85,
+                        motorcycle_bbox=moto.bbox,
+                        rider_bbox=rider_bbox,
                     )
                 )
 

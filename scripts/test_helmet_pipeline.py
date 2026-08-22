@@ -136,11 +136,12 @@ def run_helmet_pipeline_test(
                 moto_obj = next((o for o in tracked_objects if o.track_id == moto_id), None)
                 rider_obj = next((o for o in tracked_objects if o.track_id == rider_id), None)
 
-                if moto_obj is None or rider_obj is None:
+                rider_bbox = rider_obj.bbox if rider_obj is not None else assoc.rider_bbox
+                if rider_bbox is None:
                     continue
 
                 # 4. Extract Head ROI Crop
-                head_crop = extract_head_crop(frame, rider_obj.bbox)
+                head_crop = extract_head_crop(frame, rider_bbox)
                 if head_crop is None or head_crop.shape[0] < 24 or head_crop.shape[1] < 24:
                     continue
 
@@ -184,7 +185,7 @@ def run_helmet_pipeline_test(
                         confidence=pred.confidence,
                         obs_count=obs_count,
                         total_obs=10,
-                        rider_bbox=rider_obj.bbox,
+                        rider_bbox=rider_bbox,
                     )
 
             # 6. Evaluate temporal violations

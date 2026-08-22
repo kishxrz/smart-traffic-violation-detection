@@ -148,3 +148,73 @@ class TestHelmetPipelineTelemetry:
 
         v2 = detector.evaluate(BLANK_FRAME, [moto, rider], scene)
         assert len(v2) == 0
+
+
+class TestRiderAssociatorUnitCases:
+    def test_person_motorcycle_associated(self):
+        """1. Person + motorcycle correctly associated."""
+        associator = RiderAssociator(allow_motorcycle_crop_fallback=False)
+        moto = make_track(1, 3, "motorcycle", 100, 300, 200, 450)
+        rider = make_track(10, 0, "person", 110, 200, 190, 350)
+
+        assocs = associator.associate([moto, rider])
+        assert len(assocs) == 1
+        assert assocs[0].motorcycle_id == 1
+        assert assocs[0].rider_id == 10
+
+    def test_person_outside_motorcycle_rejected(self):
+        """2. Person outside motorcycle ROI rejected."""
+        associator = RiderAssociator(allow_motorcycle_crop_fallback=False)
+        moto = make_track(1, 3, "motorcycle", 100, 300, 200, 450)
+        pedestrian = make_track(99, 0, "person", 800, 300, 880, 450)
+
+        assocs = associator.associate([moto, pedestrian])
+        assert len(assocs) == 0
+
+    def test_multiple_motorcycles_multiple_riders(self):
+        """3. Multiple motorcycles with multiple riders correctly paired."""
+        associator = RiderAssociator(allow_motorcycle_crop_fallback=False)
+        m1 = make_track(1, 3, "motorcycle", 100, 300, 200, 450)
+        r1 = make_track(10, 0, "person", 110, 200, 190, 350)
+
+        m2 = make_track(2, 3, "motorcycle", 500, 300, 600, 450)
+        r2 = make_track(20, 0, "person", 510, 200, 590, 350)
+
+        assocs = associator.associate([m1, r1, m2, r2])
+        assert len(assocs) == 2
+        assoc_map = {a.motorcycle_id: a.rider_id for a in assocs}
+        assert assoc_map[1] == 10
+        assert assoc_map[2] == 20
+
+    def test_motorcycle_without_visible_rider_fallback(self):
+        """4. Motorcycle without separate rider box uses fallback crop."""
+        associator = RiderAssociator(allow_motorcycle_crop_fallback=True)
+        moto = make_track(1, 3, "motorcycle", 100, 300, 200, 450)
+
+        assocs = associator.associate([moto])
+        assert len(assocs) == 1
+        assert assocs[0].motorcycle_id == 1
+        assert assocs[0].rider_id == 10001
+        assert assocs[0].rider_bbox.y2 == 300 + int(150 * 0.65)
+
+    def test_person_without_motorcycle(self):
+        """5. Person without motorcycle yields 0 associations."""
+        associator = RiderAssociator(allow_motorcycle_crop_fallback=True)
+        pedestrian = make_track(5, 0, "person", 100, 200, 180, 350)
+
+        assocs = associator.associate([pedestrian])
+        assert len(assocs) == 0
+
+    def test_stable_association_across_frames(self):
+        """6. Stable association across consecutive frames."""
+        associator = RiderAssociator(allow_motorcycle_crop_fallback=True)
+
+        for frame in range(1, 10):
+            moto = make_track(1, 3, "motorcycle", 100 + frame, 300, 200 + frame, 450)
+            rider = make_track(10, 0, "person", 110 + frame, 200, 190 + frame, 350)
+            assocs = associator.associate([moto, rider])
+
+            assert len(assocs) == 1
+            assert assocs[0].motorcycle_id == 1
+            assert assocs[0].rider_id == 10
+
