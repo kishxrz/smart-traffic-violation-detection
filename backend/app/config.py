@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # ── Model Paths ───────────────────────────────────────────────────────────
     yolo_model_path: str = "models/yolov8n.pt"
     yolo_model_size: Literal["n", "s", "m", "l", "x"] = "n"
-    helmet_model_path: Optional[str] = None
+    helmet_model_path: Optional[str] = "models/helmet_v2.pt"
 
     # ── Inference Hyperparameters ─────────────────────────────────────────────
     confidence_threshold: float = Field(default=0.45, ge=0.0, le=1.0)

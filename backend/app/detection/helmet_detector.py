@@ -4,21 +4,21 @@ backend/app/detection/helmet_detector.py
 Custom YOLO Helmet & Rider Safety Classification Detector.
 
 Design:
-  Loads custom trained YOLO weights (default: models/helmet_v1.pt) to detect:
+  Loads custom trained YOLO weights (default: models/helmet_v2.pt) to classify head crops into:
     - 0: helmet
     - 1: no_helmet
 
 Environment Variable:
-  HELMET_MODEL_PATH=models/helmet_v1.pt (configurable, no hardcoded machine paths)
+  HELMET_MODEL_PATH=models/helmet_v2.pt (configurable)
 """
 
 from __future__ import annotations
 
-import os
 import logging
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -35,6 +35,11 @@ class HelmetPrediction:
     confidence: float        # Prediction confidence [0.0, 1.0]
     class_id: Optional[int]  # 0: helmet, 1: no_helmet, None: UNKNOWN
     bbox: Optional[BoundingBox] = None  # BoundingBox inside the head crop if detected
+    crop_shape: Optional[Tuple[int, int]] = None
+    vehicle_id: Optional[int] = None
+    person_id: Optional[int] = None
+    frame_number: Optional[int] = None
+    obs_count: int = 0
 
 
 class HelmetDetector:
@@ -49,7 +54,7 @@ class HelmetDetector:
         device: Optional[str] = None,
     ) -> None:
         settings = get_settings()
-        env_path = os.getenv("HELMET_MODEL_PATH", "models/helmet_v1.pt")
+        env_path = os.getenv("HELMET_MODEL_PATH", settings.helmet_model_path or "models/helmet_v2.pt")
         self.model_path = Path(model_path or env_path)
         self.conf_threshold = conf_threshold
         self.device = device or settings.device
@@ -71,10 +76,10 @@ class HelmetDetector:
 
         try:
             from ultralytics import YOLO
-            logger.info("Loading custom helmet YOLO model from: %s", self.model_path)
+            logger.info("Loading custom helmet YOLO model v2 from: %s", self.model_path)
             self._model = YOLO(str(self.model_path))
             self._is_loaded = True
-            logger.info("Custom helmet YOLO model loaded successfully.")
+            logger.info("Custom helmet YOLO model v2 loaded successfully.")
         except Exception as err:
             logger.warning("Failed to load custom helmet model: %s", err)
             self._is_loaded = False
@@ -83,7 +88,14 @@ class HelmetDetector:
     def is_available(self) -> bool:
         return self._is_loaded and self._model is not None
 
-    def predict_crop(self, head_crop: np.ndarray) -> HelmetPrediction:
+    def predict_crop(
+        self,
+        head_crop: np.ndarray,
+        vehicle_id: Optional[int] = None,
+        person_id: Optional[int] = None,
+        frame_number: Optional[int] = None,
+        obs_count: int = 0,
+    ) -> HelmetPrediction:
         """
         Classify a cropped head ROI image.
 
@@ -91,7 +103,18 @@ class HelmetDetector:
             HelmetPrediction(status="HELMET" | "NO_HELMET" | "UNKNOWN", confidence=float, ...)
         """
         if not self.is_available or head_crop is None or head_crop.size == 0:
-            return HelmetPrediction(status="UNKNOWN", confidence=0.0, class_id=None)
+            return HelmetPrediction(
+                status="UNKNOWN",
+                confidence=0.0,
+                class_id=None,
+                crop_shape=head_crop.shape[:2] if head_crop is not None else None,
+                vehicle_id=vehicle_id,
+                person_id=person_id,
+                frame_number=frame_number,
+                obs_count=obs_count,
+            )
+
+        crop_h, crop_w = head_crop.shape[:2]
 
         try:
             # Run inference on crop
@@ -103,8 +126,16 @@ class HelmetDetector:
             )
 
             if not results or len(results[0].boxes) == 0:
-                # No helmet or no_helmet box detected with sufficient confidence
-                return HelmetPrediction(status="UNKNOWN", confidence=0.0, class_id=None)
+                return HelmetPrediction(
+                    status="UNKNOWN",
+                    confidence=0.0,
+                    class_id=None,
+                    crop_shape=(crop_h, crop_w),
+                    vehicle_id=vehicle_id,
+                    person_id=person_id,
+                    frame_number=frame_number,
+                    obs_count=obs_count,
+                )
 
             boxes = results[0].boxes
             best_idx = int(boxes.conf.argmax())
@@ -116,12 +147,36 @@ class HelmetDetector:
 
             # Map class_id to status: 0 = helmet, 1 = no_helmet
             if best_cls == 0:
-                return HelmetPrediction(status="HELMET", confidence=best_conf, class_id=0, bbox=bbox)
+                status = "HELMET"
+                class_id = 0
             elif best_cls == 1:
-                return HelmetPrediction(status="NO_HELMET", confidence=best_conf, class_id=1, bbox=bbox)
+                status = "NO_HELMET"
+                class_id = 1
             else:
-                return HelmetPrediction(status="UNKNOWN", confidence=best_conf, class_id=None)
+                status = "UNKNOWN"
+                class_id = None
+
+            return HelmetPrediction(
+                status=status,
+                confidence=best_conf,
+                class_id=class_id,
+                bbox=bbox,
+                crop_shape=(crop_h, crop_w),
+                vehicle_id=vehicle_id,
+                person_id=person_id,
+                frame_number=frame_number,
+                obs_count=obs_count,
+            )
 
         except Exception as err:
             logger.error("Error during helmet inference: %s", err)
-            return HelmetPrediction(status="UNKNOWN", confidence=0.0, class_id=None)
+            return HelmetPrediction(
+                status="UNKNOWN",
+                confidence=0.0,
+                class_id=None,
+                crop_shape=(crop_h, crop_w),
+                vehicle_id=vehicle_id,
+                person_id=person_id,
+                frame_number=frame_number,
+                obs_count=obs_count,
+            )

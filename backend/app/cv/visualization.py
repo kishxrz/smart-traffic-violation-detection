@@ -79,6 +79,35 @@ def draw_tracked_object(
     return out
 
 
+def draw_helmet_debug(
+    frame: np.ndarray,
+    vehicle_id: int,
+    rider_id: int,
+    status: str,
+    confidence: float,
+    obs_count: int,
+    total_obs: int,
+    rider_bbox: BoundingBox,
+) -> np.ndarray:
+    """
+    Draw optional helmet debug annotation overlay on rider head crop region.
+    """
+    out = frame.copy()
+    rx1, ry1, rx2, ry2 = rider_bbox.to_xyxy()
+
+    color = COLOR_VIOLATION if status == "NO_HELMET" else (COLOR_NORMAL if status == "HELMET" else COLOR_WARNING)
+    cv2.rectangle(out, (rx1, ry1), (rx2, ry2), color, 2)
+
+    line1 = f"Vehicle #{vehicle_id} | Rider #{rider_id}"
+    line2 = f"{status} {confidence:.2f} | Obs: {obs_count}/{total_obs}"
+
+    y_origin = max(ry1 - 15, 30)
+    _draw_label(out, line1, (rx1, y_origin - 12), color, font_scale=0.40)
+    _draw_label(out, line2, (rx1, y_origin), color, font_scale=0.40)
+
+    return out
+
+
 def draw_stop_line(
     frame: np.ndarray,
     y: int,

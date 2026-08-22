@@ -101,14 +101,24 @@ class HelmetViolationDetector(ViolationDetector):
 
             # 2. Extract head ROI crop
             head_crop = extract_head_crop(frame, rider_obj.bbox)
-            if head_crop is None:
+            if head_crop is None or head_crop.shape[0] < 24 or head_crop.shape[1] < 24:
                 continue
 
-            # 3. Predict helmet status via custom HelmetDetector
-            prediction = self._helmet_detector.predict_crop(head_crop)
+            # Safeguard: Rider association confidence threshold
+            if assoc.association_confidence < 0.30:
+                continue
+
+            # 3. Predict helmet status via custom HelmetDetector (Model v2)
+            history = self._prediction_history[moto_id]
+            prediction = self._helmet_detector.predict_crop(
+                head_crop,
+                vehicle_id=moto_id,
+                person_id=rider_id,
+                frame_number=scene_state.frame_number,
+                obs_count=len(history) + 1,
+            )
 
             # Store prediction in history window (keep max 15 recent observations)
-            history = self._prediction_history[moto_id]
             history.append(prediction)
             if len(history) > 15:
                 history.pop(0)

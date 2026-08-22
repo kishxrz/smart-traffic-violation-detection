@@ -16,11 +16,14 @@ Tests cover:
   8. Confirmed HELMET status (NO violation)
   9. Violation cooldown de-duplication
   10. Schema verification (rider_id, helmet_model_confidence, violation_confidence, metadata)
+  11. Model v2 path configuration verification
+  12. Rider association failure handling
 """
 
 import numpy as np
 import pytest
 
+from app.config import get_settings
 from app.cv.head_roi import extract_head_crop
 from app.detection.helmet_detector import HelmetDetector, HelmetPrediction
 from app.schemas.detection import BoundingBox, TrackedObject
@@ -68,12 +71,14 @@ class MockHelmetDetector(HelmetDetector):
         self._idx = 0
         self._is_loaded = True
         self.conf_threshold = 0.50
+        self.predict_crop_calls = []
 
     @property
     def is_available(self) -> bool:
         return True
 
-    def predict_crop(self, head_crop: np.ndarray) -> HelmetPrediction:
+    def predict_crop(self, head_crop: np.ndarray, **kwargs) -> HelmetPrediction:
+        self.predict_crop_calls.append(head_crop)
         if not self.predictions:
             return HelmetPrediction(status="UNKNOWN", confidence=0.0, class_id=None)
         pred = self.predictions[min(self._idx, len(self.predictions) - 1)]
@@ -82,6 +87,11 @@ class MockHelmetDetector(HelmetDetector):
 
 
 class TestHelmetPipeline:
+    def test_v2_model_path_configuration(self):
+        """Verify settings default helmet_model_path points to models/helmet_v2.pt."""
+        settings = get_settings()
+        assert settings.helmet_model_path == "models/helmet_v2.pt"
+
     def test_rider_motorcycle_association(self):
         """Test spatial association between motorcycle and rider."""
         associator = RiderAssociator(min_horizontal_overlap=0.30)
@@ -101,19 +111,21 @@ class TestHelmetPipeline:
         assert assoc.rider_id == 5
         assert assoc.association_confidence > 0.50
 
-    def test_head_roi_extraction(self):
-        """Test head crop region calculation and bounds checking."""
-        frame = np.zeros((400, 600, 3), dtype=np.uint8)
-        rider_bbox = BoundingBox(x1=100, y1=100, x2=200, y2=300)
+    def test_head_crop_passed_to_detector(self):
+        """Verify that head crop image patch is directly passed to predict_crop."""
+        severity = SeverityEngine()
+        mock_detector = MockHelmetDetector([HelmetPrediction(status="HELMET", confidence=0.90, class_id=0)])
+        detector = HelmetViolationDetector(severity_engine=severity, helmet_detector=mock_detector)
 
-        crop = extract_head_crop(frame, rider_bbox, top_fraction=0.35)
-        assert crop is not None
-        assert crop.shape[0] > 0
-        assert crop.shape[1] > 0
+        moto = make_mock_track(track_id=10, class_id=3, class_name="motorcycle", x1=100, y1=300, x2=200, y2=450, frames_tracked=12)
+        rider = make_mock_track(track_id=5, class_id=0, class_name="person", x1=110, y1=200, x2=190, y2=350, frames_tracked=12)
+        scene = SceneState(frame_number=10, timestamp=0.4)
 
-        # Test invalid bbox
-        invalid_bbox = BoundingBox(x1=100, y1=100, x2=100, y2=100)
-        assert extract_head_crop(frame, invalid_bbox) is None
+        detector.evaluate(BLANK_FRAME, [moto, rider], scene)
+        assert len(mock_detector.predict_crop_calls) == 1
+        passed_crop = mock_detector.predict_crop_calls[0]
+        assert isinstance(passed_crop, np.ndarray)
+        assert passed_crop.shape[0] > 0 and passed_crop.shape[1] > 0
 
     def test_unknown_state_no_violation(self):
         """UNKNOWN prediction state must NEVER trigger a violation."""
@@ -189,6 +201,22 @@ class TestHelmetPipeline:
 
         for _ in range(8):
             violations = detector.evaluate(BLANK_FRAME, [moto, rider], scene)
+            assert len(violations) == 0
+
+    def test_rider_association_failure(self):
+        """Unassociated motorcycle or pedestrian must NOT trigger helmet violation."""
+        severity = SeverityEngine()
+        mock_detector = MockHelmetDetector([HelmetPrediction(status="NO_HELMET", confidence=0.95, class_id=1)] * 10)
+        detector = HelmetViolationDetector(severity_engine=severity, helmet_detector=mock_detector)
+
+        # Motorcycle with NO rider near it
+        moto = make_mock_track(track_id=1, class_id=3, class_name="motorcycle", x1=100, y1=300, x2=200, y2=450, frames_tracked=12)
+        # Person far away (bystander)
+        pedestrian = make_mock_track(track_id=99, class_id=0, class_name="person", x1=800, y1=100, x2=850, y2=250, frames_tracked=12)
+        scene = SceneState(frame_number=10, timestamp=0.4)
+
+        for _ in range(8):
+            violations = detector.evaluate(BLANK_FRAME, [moto, pedestrian], scene)
             assert len(violations) == 0
 
     def test_violation_cooldown(self):
