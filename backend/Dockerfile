@@ -1,6 +1,6 @@
 # ============================================================
 # Smart Traffic AI — Backend Dockerfile
-# Multi-stage build for a lean production image.
+# Multi-stage build for lean production deployment (Local / HuggingFace / Cloud)
 # ============================================================
 
 # ── Stage 1: Dependencies ────────────────────────────────────
@@ -32,18 +32,18 @@ COPY app/ ./app/
 COPY models/ ./models/
 
 # Create evidence and models directories
-RUN mkdir -p evidence models
+RUN mkdir -p evidence models /tmp/evidence
 
-# Create a non-root user for security
-RUN useradd -m -u 1001 trafficai && chown -R trafficai:trafficai /app
+# Create a non-root user for security (Hugging Face / Cloud compatibility)
+RUN useradd -m -u 1000 trafficai && chown -R trafficai:trafficai /app /tmp/evidence
 USER trafficai
 
-# Expose port
-EXPOSE 8000
+# Expose standard port and HuggingFace Spaces port
+EXPOSE 8000 7860
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"
+    CMD python -c "import urllib.request, os; port=os.environ.get('PORT', '8000'); urllib.request.urlopen(f'http://localhost:{port}/api/health')"
 
-# Start the server
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Start the server on $PORT or fallback to 8000
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
