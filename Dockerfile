@@ -9,11 +9,9 @@ WORKDIR /install
 
 COPY backend/requirements.txt ./requirements.txt
 
-# Install lightweight CPU PyTorch wheels first
-RUN pip install --no-cache-dir --prefix=/opt/venv torch torchvision --index-url https://download.pytorch.org/whl/cpu
-
-# Install remaining backend requirements
-RUN pip install --no-cache-dir --prefix=/opt/venv -r requirements.txt
+# Install numpy 1.26.4 and CPU PyTorch in one consistent step to avoid numpy 2.x version mixing
+RUN pip install --no-cache-dir --prefix=/opt/venv "numpy==1.26.4" torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir --prefix=/opt/venv -r requirements.txt
 
 # ── Stage 2: Runtime ─────────────────────────────────────────
 FROM python:3.11-slim AS runtime
