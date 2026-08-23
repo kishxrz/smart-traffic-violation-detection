@@ -162,8 +162,8 @@ def run_video_processing_job(
         reset_session()
 
         preprocessor_cfg = PreprocessingConfig(
-            resize=(640, 640),
-            clahe=True,
+            resize=(416, 416),
+            clahe=False,
         )
         frame_processor = FrameProcessor(
             detector=detector,
