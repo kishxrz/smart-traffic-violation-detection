@@ -4,20 +4,20 @@
 # ============================================================
 
 # ── Stage 1: Dependencies ────────────────────────────────────
-FROM python:3.13-slim AS deps
+FROM python:3.11-slim AS deps
 
 WORKDIR /install
 
 COPY requirements.txt .
 
-# Install lightweight CPU PyTorch wheels first to prevent Render OOM build limits
+# Install lightweight CPU PyTorch wheels first
 RUN pip install --no-cache-dir --prefix=/opt/venv torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 # Install remaining backend requirements
 RUN pip install --no-cache-dir --prefix=/opt/venv -r requirements.txt
 
 # ── Stage 2: Runtime ─────────────────────────────────────────
-FROM python:3.13-slim AS runtime
+FROM python:3.11-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
