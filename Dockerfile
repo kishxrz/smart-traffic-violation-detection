@@ -9,6 +9,10 @@ WORKDIR /install
 
 COPY backend/requirements.txt ./requirements.txt
 
+# Install lightweight CPU PyTorch wheels first to prevent Render OOM build limits
+RUN pip install --no-cache-dir --prefix=/opt/venv torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining backend requirements
 RUN pip install --no-cache-dir --prefix=/opt/venv -r requirements.txt
 
 # ── Stage 2: Runtime ─────────────────────────────────────────
