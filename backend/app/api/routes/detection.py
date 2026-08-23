@@ -3,9 +3,10 @@ backend/app/api/routes/detection.py
 ─────────────────────────────────────
 Detection endpoints.
 
-POST /api/detection/image   — Run detection on a single uploaded image.
-POST /api/detection/video   — Run detection on an uploaded video (async).
-GET  /api/detection/config  — Return current detection configuration.
+POST /api/detection/image            — Run detection on a single uploaded image.
+POST /api/detection/video            — Submit an uploaded video for asynchronous processing (HTTP 202).
+GET  /api/detection/video/{job_id}   — Check status/progress/results of a video processing job.
+GET  /api/detection/config           — Return current detection configuration.
 """
 
 from __future__ import annotations
@@ -15,12 +16,11 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 
 from app.api.dependencies import (
     get_analytics,
@@ -36,7 +36,9 @@ from app.cv.frame_processor import FrameProcessor
 from app.cv.preprocessing import PreprocessingConfig
 from app.cv.video_processor import VideoProcessor
 from app.detection.detector import BaseDetector
+from app.detection.job_manager import job_manager
 from app.evidence.evidence_generator import EvidenceGenerator
+from app.schemas.job import VideoJobResponse
 from app.schemas.violation import SceneState, TrafficLightState
 from app.tracking.object_tracker import ObjectTracker
 from app.violations.engine import ViolationEngine
@@ -135,75 +137,55 @@ async def detect_image(
     }
 
 
-@router.post("/video")
-async def detect_video(
-    file: UploadFile = File(...),
-    detector: BaseDetector = Depends(get_detector),
-    tracker: ObjectTracker = Depends(get_tracker),
-    analytics: AnalyticsAccumulator = Depends(get_analytics),
-    violation_engine: ViolationEngine = Depends(get_violation_engine),
-    evidence_gen: EvidenceGenerator = Depends(get_evidence_generator),
-) -> Dict[str, Any]:
+def run_video_processing_job(
+    job_id: str,
+    tmp_path: str,
+    detector: BaseDetector,
+    tracker: ObjectTracker,
+    analytics: AnalyticsAccumulator,
+    violation_engine: ViolationEngine,
+    evidence_gen: EvidenceGenerator,
+) -> None:
     """
-    Process an uploaded video file through the full pipeline.
-
-    Limitations:
-      - This endpoint processes the entire video synchronously.
-      - For production, use a background task queue (Celery/ARQ).
-      - Response time depends on video length and hardware.
+    Background worker execution for video processing jobs.
+    Runs the exact video processing, tracking, violation engine, evidence generation,
+    and H.264 video encoding pipeline asynchronously.
     """
     settings = get_settings()
-
-    allowed = {"video/mp4", "video/avi", "video/x-msvideo", "video/quicktime"}
-    if file.content_type not in allowed:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Unsupported video format. Use MP4/AVI.",
-        )
-
-    contents = await file.read()
-    if len(contents) > settings.max_upload_size_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large. Max size: {settings.max_upload_size_mb} MB",
-        )
-
-    # Write to a temp file so cv2.VideoCapture can open it
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-        tmp.write(contents)
-        tmp_path = tmp.name
-
-    # Reset session state for fresh processing
-    reset_session()
     session_id = str(uuid.uuid4())
-
-    preprocessor_cfg = PreprocessingConfig(
-        resize=(640, 640),
-        clahe=True,
-    )
-    frame_processor = FrameProcessor(
-        detector=detector,
-        tracker=tracker,
-        preprocessing_config=preprocessor_cfg,
-    )
-
-    all_violations = []
-    frames_processed = 0
-
-    # Annotated video output path setup
-    videos_dir = settings.evidence_abs_dir / "videos"
-    videos_dir.mkdir(parents=True, exist_ok=True)
-    temp_raw_path = videos_dir / f"raw_temp_{session_id}.mp4"
-    video_filename = f"annotated_{session_id}.mp4"
-    video_output_path = videos_dir / video_filename
-    video_writer = None
 
     from app.cv.visualization import draw_tracked_object, draw_hud
     from app.cv.video_encoder import encode_to_browser_mp4, validate_video_file
 
     try:
+        job_manager.set_processing(job_id)
+        reset_session()
+
+        preprocessor_cfg = PreprocessingConfig(
+            resize=(640, 640),
+            clahe=True,
+        )
+        frame_processor = FrameProcessor(
+            detector=detector,
+            tracker=tracker,
+            preprocessing_config=preprocessor_cfg,
+        )
+
+        all_violations = []
+        frames_processed = 0
+
+        # Annotated video output path setup
+        videos_dir = settings.evidence_abs_dir / "videos"
+        videos_dir.mkdir(parents=True, exist_ok=True)
+        temp_raw_path = videos_dir / f"raw_temp_{session_id}.mp4"
+        video_filename = f"annotated_{session_id}.mp4"
+        video_output_path = videos_dir / video_filename
+        video_writer = None
+
         with VideoProcessor(tmp_path, frame_skip=settings.frame_skip) as vp:
             metadata = vp.metadata
+            total_frames = metadata.total_frames if metadata else None
+            job_manager.update_progress(job_id, 0, total_frames)
 
             if metadata and metadata.width and metadata.height:
                 output_fps = (metadata.fps or 25.0) / settings.frame_skip
@@ -253,47 +235,130 @@ async def detect_video(
                 all_violations.extend(violations)
                 frames_processed += 1
 
-    finally:
+                # Update job status progress
+                job_manager.update_progress(job_id, frames_processed, total_frames)
+
         if video_writer:
             video_writer.release()
             video_writer = None
+
+        # Transcode OpenCV video to browser-compatible H.264 MP4
+        annotated_video_url = None
+        if temp_raw_path.exists() and temp_raw_path.stat().st_size > 1000:
+            try:
+                final_path = encode_to_browser_mp4(temp_raw_path, video_output_path)
+                valid_meta = validate_video_file(final_path)
+                annotated_video_url = f"/static/evidence/videos/{final_path.name}"
+                logger.info("Annotated video validated for job %s: %s", job_id, valid_meta)
+            except Exception as val_err:
+                logger.error("Video validation failed for job %s: %s", job_id, val_err)
+                annotated_video_url = None
+
+        summary = analytics.build_summary()
+
+        result_payload = {
+            "session_id": session_id,
+            "frames_processed": frames_processed,
+            "video_metadata": {
+                "fps": metadata.fps if metadata else None,
+                "width": metadata.width if metadata else None,
+                "height": metadata.height if metadata else None,
+                "total_frames": metadata.total_frames if metadata else None,
+                "duration_seconds": round(metadata.total_frames / metadata.fps, 1) if (metadata and metadata.fps and metadata.total_frames) else None,
+            },
+            "annotated_video_url": annotated_video_url,
+            "violations": [v.model_dump() for v in all_violations],
+            "summary": {
+                "total_vehicles": summary.total_vehicles_detected,
+                "unique_vehicles": summary.unique_vehicles_tracked,
+                "total_violations": summary.total_violations,
+                "violations_by_type": summary.violations_by_type,
+                "avg_inference_ms": summary.avg_inference_time_ms,
+                "processing_fps": summary.processing_fps,
+            },
+        }
+
+        job_manager.complete_job(job_id, result_payload)
+
+    except Exception as exc:
+        logger.exception("Background job %s failed with exception", job_id)
+        job_manager.fail_job(job_id, str(exc))
+
+    finally:
         Path(tmp_path).unlink(missing_ok=True)
 
-    # Transcode OpenCV video to browser-compatible H.264 MP4
-    annotated_video_url = None
-    if temp_raw_path.exists() and temp_raw_path.stat().st_size > 1000:
-        try:
-            final_path = encode_to_browser_mp4(temp_raw_path, video_output_path)
-            valid_meta = validate_video_file(final_path)
-            annotated_video_url = f"/static/evidence/videos/{final_path.name}"
-            logger.info("Annotated video validated and ready for browser playback: %s", valid_meta)
-        except Exception as val_err:
-            logger.error("Video validation failed: %s", val_err)
-            annotated_video_url = None
 
-    summary = analytics.build_summary()
+@router.post("/video", status_code=status.HTTP_202_ACCEPTED)
+async def detect_video(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    detector: BaseDetector = Depends(get_detector),
+    tracker: ObjectTracker = Depends(get_tracker),
+    analytics: AnalyticsAccumulator = Depends(get_analytics),
+    violation_engine: ViolationEngine = Depends(get_violation_engine),
+    evidence_gen: EvidenceGenerator = Depends(get_evidence_generator),
+) -> Dict[str, Any]:
+    """
+    Submit a video file for asynchronous detection & violation processing.
+
+    Returns HTTP 202 ACCEPTED with a job_id immediately.
+    """
+    settings = get_settings()
+
+    allowed = {"video/mp4", "video/avi", "video/x-msvideo", "video/quicktime"}
+    if file.content_type not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Unsupported video format. Use MP4/AVI.",
+        )
+
+    contents = await file.read()
+    if len(contents) > settings.max_upload_size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Max size: {settings.max_upload_size_mb} MB",
+        )
+
+    # Write to temp file for worker access
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+
+    # Create background job record
+    job = job_manager.create_job()
+
+    # Schedule background execution
+    background_tasks.add_task(
+        run_video_processing_job,
+        job.job_id,
+        tmp_path,
+        detector,
+        tracker,
+        analytics,
+        violation_engine,
+        evidence_gen,
+    )
 
     return {
-        "session_id": session_id,
-        "frames_processed": frames_processed,
-        "video_metadata": {
-            "fps": metadata.fps if metadata else None,
-            "width": metadata.width if metadata else None,
-            "height": metadata.height if metadata else None,
-            "total_frames": metadata.total_frames if metadata else None,
-            "duration_seconds": round(metadata.total_frames / metadata.fps, 1) if (metadata and metadata.fps and metadata.total_frames) else None,
-        },
-        "annotated_video_url": annotated_video_url,
-        "violations": [v.model_dump() for v in all_violations],
-        "summary": {
-            "total_vehicles": summary.total_vehicles_detected,
-            "unique_vehicles": summary.unique_vehicles_tracked,
-            "total_violations": summary.total_violations,
-            "violations_by_type": summary.violations_by_type,
-            "avg_inference_ms": summary.avg_inference_time_ms,
-            "processing_fps": summary.processing_fps,
-        },
+        "job_id": job.job_id,
+        "status": job.status,
+        "progress": job.progress,
+        "frames_processed": job.frames_processed,
     }
+
+
+@router.get("/video/{job_id}", response_model=VideoJobResponse)
+async def get_video_job_status(job_id: str) -> VideoJobResponse:
+    """
+    Retrieve current status, progress, and results for a video processing job.
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video job '{job_id}' not found.",
+        )
+    return job
 
 
 @router.get("/config")

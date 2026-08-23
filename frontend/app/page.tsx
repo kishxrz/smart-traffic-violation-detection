@@ -103,11 +103,13 @@ function UploadZone({
   accept,
   label,
   loading,
+  jobProgress,
 }: {
   onFile: (f: File) => void;
   accept: string;
   label: string;
   loading: boolean;
+  jobProgress?: { progress: number; status: string; frames: number } | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -132,10 +134,22 @@ function UploadZone({
         onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
       />
       {loading ? (
-        <div className="flex flex-col items-center gap-2">
+        <div className="flex flex-col items-center gap-3">
           <RefreshCw className="w-8 h-8 text-blue-400 animate-spin" />
-          <p className="text-sm font-medium text-blue-300">Running Computer Vision & Violation Pipeline…</p>
-          <p className="text-xs text-slate-500">Detecting objects, tracking trajectories, and analyzing traffic rules</p>
+          <p className="text-sm font-medium text-blue-300">
+            {jobProgress ? `Processing Video (${jobProgress.status} - ${jobProgress.progress}%)…` : 'Running Computer Vision & Violation Pipeline…'}
+          </p>
+          {jobProgress && (
+            <div className="w-64 bg-slate-800 rounded-full h-2 overflow-hidden border border-slate-700">
+              <div
+                className="bg-blue-500 h-full transition-all duration-300 ease-out"
+                style={{ width: `${jobProgress.progress}%` }}
+              />
+            </div>
+          )}
+          <p className="text-xs text-slate-500">
+            {jobProgress ? `Frames Processed: ${jobProgress.frames}` : 'Detecting objects, tracking trajectories, and analyzing traffic rules'}
+          </p>
         </div>
       ) : (
         <div className="flex flex-col items-center gap-2">
@@ -155,6 +169,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'overview' | 'upload' | 'violations' | 'analytics'>('overview');
   const [isOnline, setIsOnline] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
+  const [jobProgress, setJobProgress] = useState<{ progress: number; status: string; frames: number } | null>(null);
   
   // Video / Image analysis results state
   const [videoResult, setVideoResult] = useState<VideoDetectionResult | null>(null);
@@ -188,6 +203,7 @@ export default function Dashboard() {
     setUploadError(null);
     setVideoResult(null);
     setImageResult(null);
+    setJobProgress(null);
     try {
       const result = await api.detectImage(file);
       setImageResult(result);
@@ -204,10 +220,33 @@ export default function Dashboard() {
     setUploadError(null);
     setVideoResult(null);
     setImageResult(null);
+    setJobProgress({ progress: 0, status: 'queued', frames: 0 });
+
     try {
-      const result = await api.detectVideo(file);
-      setVideoResult(result);
-      fetchData();
+      const submitRes = await api.detectVideo(file);
+      const jobId = submitRes.job_id;
+
+      // Poll background job status every 2 seconds
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const statusRes = await api.getVideoJobStatus(jobId);
+
+        setJobProgress({
+          progress: statusRes.progress || 0,
+          status: statusRes.status,
+          frames: statusRes.frames_processed || 0,
+        });
+
+        if (statusRes.status === 'completed') {
+          if (statusRes.result) {
+            setVideoResult(statusRes.result);
+          }
+          fetchData();
+          break;
+        } else if (statusRes.status === 'failed') {
+          throw new Error(statusRes.error || 'Video background processing failed');
+        }
+      }
     } catch (e: unknown) {
       setUploadError(e instanceof Error ? e.message : 'Video processing failed');
     } finally {
@@ -444,11 +483,12 @@ export default function Dashboard() {
                   <Play className="w-4 h-4 text-blue-400" />
                   Video Analysis (MP4, AVI)
                 </h2>
-                <UploadZone
+                <DropZone
                   onFile={handleVideoUpload}
                   accept="video/mp4,video/avi,video/quicktime"
                   label="Upload traffic video file"
                   loading={loading}
+                  jobProgress={jobProgress}
                 />
               </div>
 
@@ -457,7 +497,7 @@ export default function Dashboard() {
                   <ImageIcon className="w-4 h-4 text-cyan-400" />
                   Single Image Snapshot
                 </h2>
-                <UploadZone
+                <DropZone
                   onFile={handleImageUpload}
                   accept="image/jpeg,image/png,image/webp"
                   label="Upload image snapshot"
