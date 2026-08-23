@@ -1,51 +1,65 @@
 # ============================================================
 # Smart Traffic AI — docker-compose.yml
-# Starts backend (FastAPI) and frontend (Next.js) together.
+# Single Public Domain Architecture with Nginx Reverse Proxy
 # ============================================================
 
-version: "3.9"
-
 services:
-  # ── Backend ─────────────────────────────────────────────────
+  # ── 1. Nginx Reverse Proxy (Public Entrypoint) ─────────────
+  nginx:
+    image: nginx:alpine
+    container_name: traffic-ai-proxy
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── 2. FastAPI Backend ──────────────────────────────────────
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: traffic-ai-backend
+    expose:
+      - "8000"
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     environment:
       - APP_ENV=production
       - DATABASE_URL=sqlite+aiosqlite:///./traffic.db
+      - HELMET_MODEL_PATH=models/helmet_v3.pt
+      - ALLOWED_ORIGINS=["*"]
     volumes:
-      - ./evidence:/app/evidence       # Persist evidence images
-      - ./models:/app/models           # Mount pre-downloaded models
+      - ./evidence:/app/evidence       # Persist evidence images and video
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
-      interval: 30s
+      interval: 15s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 30s
 
-  # ── Frontend ─────────────────────────────────────────────────
+  # ── 3. Next.js Frontend ─────────────────────────────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=
     container_name: traffic-ai-frontend
+    expose:
+      - "3000"
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://backend:8000
+      - NEXT_PUBLIC_API_URL=
       - NODE_ENV=production
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
-
-volumes:
-  evidence:
-  models:

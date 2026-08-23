@@ -14,6 +14,9 @@ Temporal Evidence Safeguards:
   3. Requires min_frames_tracked >= 10, min_observations >= 5, and no_helmet_ratio >= 0.70.
   4. UNKNOWN state NEVER triggers a violation.
   5. Decouples detection_confidence, helmet_model_confidence, and violation_confidence.
+
+Known Model Limitation:
+  The current helmet classifier performs reliably on helmet-positive detection but has limited NO_HELMET generalization under certain real-world conditions. The system therefore uses conservative temporal confirmation to reduce false violation reports.
 """
 
 from __future__ import annotations
@@ -78,7 +81,22 @@ class HelmetViolationDetector(ViolationDetector):
         frame: np.ndarray,
         tracked_objects: List[TrackedObject],
         scene_state: SceneState,
+        original_frame: Optional[np.ndarray] = None,
     ) -> List[Violation]:
+        """
+        Evaluate tracked objects for NO_HELMET violations.
+
+        Args:
+            frame:          The inference-resolution frame (used for detection/annotation).
+            tracked_objects: Tracked objects in this frame.
+            scene_state:    Current frame metadata.
+            original_frame: Optional higher-resolution original frame. When provided,
+                            head crops are extracted from this frame for better
+                            classifier input quality. YOLO bboxes are already in
+                            the input-frame coordinate space so no scaling needed.
+        """
+        # Use original_frame for crop extraction if available, else fall back to frame
+        crop_frame = original_frame if (original_frame is not None and original_frame.size > 0) else frame
         violations: List[Violation] = []
 
         # 1. Associate riders with motorcycles
@@ -99,8 +117,8 @@ class HelmetViolationDetector(ViolationDetector):
             if moto_obj.frames_tracked < self._min_frames_tracked:
                 continue
 
-            # 2. Extract head ROI crop
-            head_crop = extract_head_crop(frame, rider_obj.bbox)
+            # 2. Extract head ROI crop from original frame when available
+            head_crop = extract_head_crop(crop_frame, rider_obj.bbox)
             if head_crop is None or head_crop.shape[0] < 24 or head_crop.shape[1] < 24:
                 continue
 

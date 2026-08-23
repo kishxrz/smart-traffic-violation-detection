@@ -15,10 +15,11 @@ RUN pip install --no-cache-dir --prefix=/opt/venv -r requirements.txt
 # ── Stage 2: Runtime ─────────────────────────────────────────
 FROM python:3.13-slim AS runtime
 
-# Install OpenCV system dependencies
+# Install OpenCV system dependencies and ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libgl1 \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -26,8 +27,9 @@ WORKDIR /app
 # Copy pre-built packages from the deps stage
 COPY --from=deps /opt/venv /usr/local
 
-# Copy application code
+# Copy application code and model weights
 COPY app/ ./app/
+COPY models/ ./models/
 
 # Create evidence and models directories
 RUN mkdir -p evidence models

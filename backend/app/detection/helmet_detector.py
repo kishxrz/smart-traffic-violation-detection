@@ -4,12 +4,15 @@ backend/app/detection/helmet_detector.py
 Custom YOLO Helmet & Rider Safety Classification Detector.
 
 Design:
-  Loads custom trained YOLO weights (default: models/helmet_v2.pt) to classify head crops into:
+  Loads custom trained YOLO weights (default: models/helmet_v3.pt) to classify head crops into:
     - 0: helmet
     - 1: no_helmet
 
+Known Model Limitation:
+  The current helmet classifier performs reliably on helmet-positive detection but has limited NO_HELMET generalization under certain real-world conditions. The system therefore uses conservative temporal confirmation to reduce false violation reports.
+
 Environment Variable:
-  HELMET_MODEL_PATH=models/helmet_v2.pt (configurable)
+  HELMET_MODEL_PATH=models/helmet_v3.pt (configurable)
 """
 
 from __future__ import annotations
@@ -54,13 +57,14 @@ class HelmetDetector:
         device: Optional[str] = None,
     ) -> None:
         settings = get_settings()
-        env_path = os.getenv("HELMET_MODEL_PATH", settings.helmet_model_path or "models/helmet_v2.pt")
+        env_path = os.getenv("HELMET_MODEL_PATH", settings.helmet_model_path or "models/helmet_v3.pt")
         self.model_path = Path(model_path or env_path)
         self.conf_threshold = conf_threshold if conf_threshold is not None else getattr(settings, "helmet_confidence_threshold", 0.35)
         self.device = device or settings.device
 
         self._model = None
         self._is_loaded = False
+        self._is_classifier = False   # True when model is YOLOv8-cls
         self._load_model_if_exists()
 
     def _load_model_if_exists(self) -> None:
@@ -79,7 +83,13 @@ class HelmetDetector:
             logger.info("Loading custom helmet YOLO model v2 from: %s", self.model_path)
             self._model = YOLO(str(self.model_path))
             self._is_loaded = True
-            logger.info("Custom helmet YOLO model v2 loaded successfully.")
+            # Detect model task: 'classify' for cls models, 'detect' for det models
+            task = getattr(self._model, 'task', None) or getattr(self._model.model, 'task', None) or ''
+            self._is_classifier = (str(task).lower() == 'classify')
+            logger.info(
+                "Custom helmet YOLO model loaded successfully. task=%s classifier=%s",
+                task, self._is_classifier,
+            )
         except Exception as err:
             logger.warning("Failed to load custom helmet model: %s", err)
             self._is_loaded = False
@@ -120,11 +130,58 @@ class HelmetDetector:
             # Run inference on crop
             results = self._model.predict(
                 source=head_crop,
-                conf=self.conf_threshold,
                 device=self.device,
                 verbose=False,
             )
 
+            if not results:
+                return HelmetPrediction(
+                    status="UNKNOWN",
+                    confidence=0.0,
+                    class_id=None,
+                    crop_shape=(crop_h, crop_w),
+                    vehicle_id=vehicle_id,
+                    person_id=person_id,
+                    frame_number=frame_number,
+                    obs_count=obs_count,
+                )
+
+            # ── Classification model path (YOLOv8-cls) ──────────────────────
+            if self._is_classifier:
+                probs = results[0].probs
+                if probs is None:
+                    return HelmetPrediction(
+                        status="UNKNOWN", confidence=0.0, class_id=None,
+                        crop_shape=(crop_h, crop_w),
+                        vehicle_id=vehicle_id, person_id=person_id,
+                        frame_number=frame_number, obs_count=obs_count,
+                    )
+                best_cls  = int(probs.top1)
+                best_conf = float(probs.top1conf.cpu().item())
+
+                if best_conf < self.conf_threshold:
+                    return HelmetPrediction(
+                        status="UNKNOWN", confidence=best_conf, class_id=None,
+                        crop_shape=(crop_h, crop_w),
+                        vehicle_id=vehicle_id, person_id=person_id,
+                        frame_number=frame_number, obs_count=obs_count,
+                    )
+
+                if best_cls == 0:
+                    status, class_id = "HELMET", 0
+                elif best_cls == 1:
+                    status, class_id = "NO_HELMET", 1
+                else:
+                    status, class_id = "UNKNOWN", None
+
+                return HelmetPrediction(
+                    status=status, confidence=best_conf, class_id=class_id,
+                    bbox=None, crop_shape=(crop_h, crop_w),
+                    vehicle_id=vehicle_id, person_id=person_id,
+                    frame_number=frame_number, obs_count=obs_count,
+                )
+
+            # ── Detection model path (original YOLO bbox) ────────────────────
             if not results or len(results[0].boxes) == 0:
                 return HelmetPrediction(
                     status="UNKNOWN",
@@ -141,6 +198,14 @@ class HelmetDetector:
             best_idx = int(boxes.conf.argmax())
             best_conf = float(boxes.conf[best_idx].cpu().item())
             best_cls = int(boxes.cls[best_idx].cpu().item())
+
+            if best_conf < self.conf_threshold:
+                return HelmetPrediction(
+                    status="UNKNOWN", confidence=best_conf, class_id=None,
+                    crop_shape=(crop_h, crop_w),
+                    vehicle_id=vehicle_id, person_id=person_id,
+                    frame_number=frame_number, obs_count=obs_count,
+                )
 
             xyxy = boxes.xyxy[best_idx].cpu().numpy()
             bbox = BoundingBox(x1=int(xyxy[0]), y1=int(xyxy[1]), x2=int(xyxy[2]), y2=int(xyxy[3]))

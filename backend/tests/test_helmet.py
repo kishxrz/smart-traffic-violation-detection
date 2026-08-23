@@ -87,10 +87,10 @@ class MockHelmetDetector(HelmetDetector):
 
 
 class TestHelmetPipeline:
-    def test_v2_model_path_configuration(self):
-        """Verify settings default helmet_model_path points to models/helmet_v2.pt."""
+    def test_v3_model_path_configuration(self):
+        """Verify settings default helmet_model_path points to models/helmet_v3.pt."""
         settings = get_settings()
-        assert settings.helmet_model_path == "models/helmet_v2.pt"
+        assert settings.helmet_model_path == "models/helmet_v3.pt"
 
     def test_rider_motorcycle_association(self):
         """Test spatial association between motorcycle and rider."""

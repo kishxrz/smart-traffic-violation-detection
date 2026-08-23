@@ -9,6 +9,12 @@ Design:
   3. Quality & Truncation Filter: Rejects crops that are truncated by frame boundaries (>25%),
      too small (<32x32 px), or have invalid aspect ratios (outside 0.45 - 2.0).
   4. Returns structured extraction result with explicit telemetry rejection reason.
+
+Coordinate-space contract:
+  All bbox coordinates passed to these functions MUST be in the same pixel space
+  as the `frame` array provided. YOLO/Ultralytics already scales output boxes back
+  to the input-frame pixel space, so pass the ORIGINAL frame (not a pre-scaled one)
+  for highest-quality crops. The final crop is resized to `target_size` via LANCZOS4.
 """
 
 from __future__ import annotations
@@ -99,11 +105,14 @@ def extract_head_crop(
     top_fraction: float = 0.35,
     padding_fraction: float = 0.10,
     min_size_px: Tuple[int, int] = (24, 24),
+    target_size: Optional[Tuple[int, int]] = (224, 224),
 ) -> Optional[np.ndarray]:
     """
     Extract the head/helmet ROI crop from an image frame for a given rider bounding box.
 
     Maintains backward compatibility with existing tests.
+    The crop is resized to `target_size` (default 224×224) using LANCZOS4 interpolation
+    so the classifier always receives a fixed-size input matching its training resolution.
     """
     result = extract_head_crop_with_quality(
         frame=frame,
@@ -111,6 +120,7 @@ def extract_head_crop(
         top_fraction=top_fraction,
         padding_fraction=padding_fraction,
         min_size_px=min_size_px,
+        target_size=target_size,
     )
     return result.crop if result.is_accepted else None
 
@@ -121,9 +131,22 @@ def extract_head_crop_with_quality(
     top_fraction: float = 0.35,
     padding_fraction: float = 0.10,
     min_size_px: Tuple[int, int] = (32, 32),
+    target_size: Optional[Tuple[int, int]] = (224, 224),
 ) -> HeadCropResult:
     """
     Extract head ROI crop with quality validation, clamping, and rejection logging.
+
+    Args:
+        frame:            Source frame. MUST be the original-resolution frame so that
+                          the extracted crop has maximum detail. YOLO bbox coordinates
+                          are already scaled back to this frame's pixel space.
+        rider_bbox:       Rider bounding box in `frame` pixel coordinates.
+        top_fraction:     Fraction of rider height to use as head region (default 0.35).
+        padding_fraction: Fractional padding around the head region (default 0.10).
+        min_size_px:      Minimum accepted crop dimensions in pixels.
+        target_size:      If set, the accepted crop is resized to (w, h) using
+                          LANCZOS4 interpolation. Default (224, 224) matches V3-cls
+                          training resolution for best classification accuracy.
     """
     if frame is None or frame.size == 0:
         return HeadCropResult(
@@ -178,6 +201,13 @@ def extract_head_crop_with_quality(
         )
 
     crop_mat = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+
+    # Resize to target_size using LANCZOS4 (best quality for classifier input)
+    if target_size is not None and crop_mat.size > 0:
+        tw, th = target_size
+        if crop_mat.shape[1] != tw or crop_mat.shape[0] != th:
+            crop_mat = cv2.resize(crop_mat, (tw, th), interpolation=cv2.INTER_LANCZOS4)
+
     return HeadCropResult(
         crop=crop_mat,
         is_accepted=True,
