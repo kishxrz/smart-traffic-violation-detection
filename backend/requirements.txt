@@ -15,21 +15,17 @@ pydantic-settings==2.5.2
 
 # --- Computer Vision ---
 opencv-python==4.10.0.84
-numpy==2.1.1
+numpy>=1.23.0,<2.0.0       # Compatible with ultralytics 8.3.0
 
 # --- Deep Learning (YOLO via PyTorch) ---
 ultralytics==8.3.0         # Includes PyTorch as a dependency
-# torch and torchvision are installed by ultralytics
-# For CUDA: install torch with the appropriate CUDA version separately:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
 # --- Optimization ---
 scipy==1.14.1              # Hungarian algorithm for object tracking
 
-# --- Database (optional) ---
+# --- Database ---
 sqlalchemy==2.0.35
-aiosqlite==0.20.0          # SQLite async driver (development/local)
-# asyncpg==0.30.0          # Uncomment for PostgreSQL
+aiosqlite==0.20.0          # SQLite async driver
 
 # --- Development / Testing ---
 pytest==8.3.3
