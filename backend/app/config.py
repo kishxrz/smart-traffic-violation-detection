@@ -19,8 +19,13 @@ from typing import List, Literal, Optional
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Project root = two directories above this file
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Project root calculation (handles both local repo and Docker container structure)
+_parent1 = Path(__file__).resolve().parents[1]
+_parent2 = Path(__file__).resolve().parents[2]
+if (_parent1 / "models").exists():
+    PROJECT_ROOT = _parent1
+else:
+    PROJECT_ROOT = _parent2
 
 
 class Settings(BaseSettings):
