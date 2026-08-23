@@ -59,7 +59,8 @@ def encode_to_browser_mp4(
         "-i", str(input_video_path),
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
-        "-preset", "fast",
+        "-preset", "ultrafast",
+        "-threads", "1",
         "-movflags", "+faststart",
         str(output_mp4_path),
     ]

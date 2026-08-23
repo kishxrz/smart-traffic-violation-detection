@@ -242,6 +242,9 @@ def run_video_processing_job(
             video_writer.release()
             video_writer = None
 
+        import gc
+        gc.collect()
+
         # Transcode OpenCV video to browser-compatible H.264 MP4
         annotated_video_url = None
         if temp_raw_path.exists() and temp_raw_path.stat().st_size > 1000:
