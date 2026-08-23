@@ -98,12 +98,24 @@ class YOLODetector(BaseDetector):
 
     def _load_model(self) -> None:
         """Load YOLO model weights. Called once before first inference."""
+        if self._model is not None:
+            return
+
+        try:
+            import torch
+            import cv2
+            torch.set_num_threads(1)
+            cv2.setNumThreads(1)
+        except Exception:
+            pass
+
         try:
             from ultralytics import YOLO
-        except ImportError as exc:
-            raise ImportError(
-                "ultralytics is not installed. Run: pip install ultralytics"
-            ) from exc
+        except ImportError as err:
+            raise RuntimeError(
+                "ultralytics package is required for YOLODetector. "
+                "Install with: pip install ultralytics"
+            ) from err
 
         model_path_str = str(self.model_path)
         logger.info("Loading YOLO model: %s on device: %s", model_path_str, self.device)
