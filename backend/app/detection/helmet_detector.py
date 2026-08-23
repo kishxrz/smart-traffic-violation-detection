@@ -79,6 +79,14 @@ class HelmetDetector:
             return
 
         try:
+            import torch
+            import cv2
+            torch.set_num_threads(1)
+            cv2.setNumThreads(1)
+        except Exception:
+            pass
+
+        try:
             from ultralytics import YOLO
             logger.info("Loading custom helmet YOLO model v2 from: %s", self.model_path)
             self._model = YOLO(str(self.model_path))
